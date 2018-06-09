@@ -8,16 +8,18 @@
 using namespace eosio;
 using namespace std;
 
-//@abi table accounts i64
+//@abi table accountss i64
 struct Account {
     account_name owner;
     uint64_t balance = 0;
+
+    int64_t relaying = -1;
 
     uint64_t primary_key() const {
         return owner;
     }
 
-    EOSLIB_SERIALIZE(Account, (owner)(balance))
+    EOSLIB_SERIALIZE(Account, (owner)(balance)(relaying))
 };
 
 //@abi table endpoints i64
@@ -31,7 +33,7 @@ struct Endpoint {
     EOSLIB_SERIALIZE(Endpoint, (url))
 };
 
-//@abi table reqs i64
+//@abi table reque i64
 struct Request {
     uint64_t id;
     string url;
@@ -42,6 +44,10 @@ struct Request {
 
     uint64_t primary_key() const {
         return id;
+    }
+
+    uint64_t by_url() const {
+        return N(url);
     }
 
     EOSLIB_SERIALIZE(Request, (id)(url)(sender)(request)(response)(relayers))
@@ -76,6 +82,7 @@ public:
             req.sender = sender;
             req.url = url;
             req.request = message;
+            req.relayers.clear();
         });
 
         print("Success.");
@@ -96,18 +103,32 @@ public:
     void delendpoint(string url) {
         eosio_assert(endpoints.find(N(url)) != endpoints.end(), "Endpoint doesn't exist.");
 
-        endpoints.erase(endpoints.find(N(url)));
+        auto endpoint = endpoints.find(N(url));
+        endpoints.erase(endpoint);
+
+        auto requests_with_endpoint = requests.get_index<N(byurl)>();
+        auto requests_of_url = requests_with_endpoint.find(N(endpoint->url));
+        if (requests_of_url != requests_with_endpoint.end()) {
+            requests_with_endpoint.erase(requests_of_url);
+        }
+
     }
 
     //@abi action
     void assign(account_name relayer) {
         create_account(relayer);
 
-        for (const Request& req : requests) {
+        auto account = accounts.get(relayer, "Cannot create account for some odd reason.");
+        eosio_assert(account.relaying == -1, "You're already relaying for another request.");
+
+        for (const Request &req : requests) {
             // Get all requests with less than 3 relayers, and an empty response.
             if (req.relayers.size() < 3 && req.response.empty()) {
-                requests.modify(req, _self, [&](Request & req) {
+                requests.modify(requests.get(req.id, "Strange."), _self, [&](Request &req) {
                     req.relayers.push_back(relayer);
+                });
+                accounts.modify(accounts.get(relayer, "Stranger."), _self, [&](Account &account) {
+                    account.relaying = req.id;
                 });
                 break;
             }
@@ -115,11 +136,17 @@ public:
     }
 
     //@abi action
-    void respond(account_name relayer, uint64_t requestId, string response) {
-        auto request = requests.get(requestId, "Unable to find request to respond to.");
+    void respond(account_name relayer, string response) {
+        auto account = accounts.get(relayer, "Account does not exist.");
+        eosio_assert(account.relaying != -1, "You are not relaying.");
+        auto request = requests.get(account.relaying, "Unable to find request to respond to.");
 
-        requests.modify(request, _self, [&](Request &req) {
+        requests.modify(requests.get(request.id, "Strange."), _self, [&](Request &req) {
             req.response = response;
+        });
+
+        accounts.modify(accounts.get(relayer, "Stranger."), _self, [&](Account &account) {
+            account.relaying = -1;
         });
     }
 
@@ -127,9 +154,11 @@ public:
 private:
     int difficulty = 4;
 
-    typedef multi_index<N(accounts), Account> accounts_index;
+    typedef multi_index<N(accountss), Account> accounts_index;
     typedef multi_index<N(endpoints), Endpoint> endpoints_index;
-    typedef multi_index<N(reqs), Request> requests_index;
+    typedef multi_index<N(reque), Request,
+            indexed_by<N(byurl), const_mem_fun<Request, uint64_t, &Request::by_url>>
+    > requests_index;
 
     accounts_index accounts;
     endpoints_index endpoints;
