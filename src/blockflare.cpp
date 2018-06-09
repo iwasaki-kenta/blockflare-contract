@@ -3,6 +3,7 @@
 //
 
 #include <eosiolib/eosio.hpp>
+#include <eosiolib/time.hpp>
 #include <eosiolib/crypto.h>
 
 using namespace eosio;
@@ -34,13 +35,15 @@ struct Endpoint {
     EOSLIB_SERIALIZE(Endpoint, (url))
 };
 
-//@abi table reqias i64
+//@abi table reqrws i64
 struct Request {
     uint64_t id;
     string url;
     account_name sender;
     string request;
     string response;
+    time_point_sec start_time;
+    time_point_sec end_time;
     vector<account_name> relayers;
 
     uint64_t primary_key() const {
@@ -51,7 +54,7 @@ struct Request {
         return N(url);
     }
 
-    EOSLIB_SERIALIZE(Request, (id)(url)(sender)(request)(response)(relayers))
+    EOSLIB_SERIALIZE(Request, (id)(url)(sender)(request)(response)(start_time)(end_time)(relayers))
 };
 
 class blockflare : contract {
@@ -84,6 +87,7 @@ public:
             req.url = url;
             req.request = message;
             req.relayers.clear();
+            req.start_time = time_point_sec(now());
         });
 
         print("Success.");
@@ -141,15 +145,23 @@ public:
     void respond(account_name relayer, string response) {
         auto account = accounts.get(relayer, "Account does not exist.");
         eosio_assert(account.relaying != -1 && !account.relayAddress.empty(), "You are not relaying.");
-        auto request = requests.get(account.relaying, "Unable to find request to respond to.");
+        const Request& request = requests.get(account.relaying, "Unable to find request to respond to.");
 
         requests.modify(requests.get(request.id, "Strange."), _self, [&](Request &req) {
             req.response = response;
+            req.end_time = time_point_sec(now());
         });
 
         accounts.modify(accounts.get(relayer, "Stranger."), _self, [&](Account &account) {
+            const Request& view = requests.get(account.relaying, "Unable to find request to respond to.");
+
             account.relaying = -1;
             account.relayAddress = "";
+
+            // Provide simple award to relayers w/ min of 1 coin.
+            auto max_reward = 15;
+            auto elapsed = (view.end_time - view.start_time).to_seconds();
+            account.balance += (max_reward - elapsed <= 0 ? 1 : max_reward - elapsed) * 10 / difficulty;
         });
     }
 
@@ -159,7 +171,7 @@ private:
 
     typedef multi_index<N(ledger), Account> accounts_index;
     typedef multi_index<N(endpoints), Endpoint> endpoints_index;
-    typedef multi_index<N(reqias), Request,
+    typedef multi_index<N(reqrws), Request,
             indexed_by<N(byurl), const_mem_fun<Request, uint64_t, &Request::by_url>>
     > requests_index;
 
