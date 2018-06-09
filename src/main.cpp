@@ -8,45 +8,72 @@ class blockflare : contract {
 public:
     blockflare(account_name owner) : contract(owner) {}
 
-    void request(string data, string message, string proof) {
+    void request(string data, string nonce, string proof) {
+        string message = data + nonce;
+
         checksum256 checksum;
         sha256(const_cast<char *>(message.c_str()), message.length(), &checksum);
         checksum256 proof_checksum = decode_checksum(proof);
 
         eosio_assert(checksum == proof_checksum, "Checksum of message is not equivalent to proof of work.");
 
-        auto dfficulty_prefix = difficulty_prefix();
+        auto diff_prefix = difficulty_prefix();
         auto proof_prefix = proof.substr(0, difficulty);
 
-        print_f("Difficulty: % - % - Proof: % - Proof dfficulty_prefix: % - Generated dfficulty_prefix: % - ",
+        print_f("Difficulty: % - Message: % - Proof: % - Proof prefix: % - Generated prefix: % - ",
                 difficulty,
+                message,
                 proof, proof_prefix,
-                dfficulty_prefix);
+                diff_prefix);
 
-        if (proof_prefix == dfficulty_prefix) {
-            request_queue.push_back(queued_request{data});
-            print("Proof is correct. Queued up request for relayers.");
-        } else {
-            print("Proof is incorrect. Failed to queue up request for relayers.");
-        }
+        eosio_assert(proof_prefix == diff_prefix, "Proof of work does not match up to current contract's difficulty.");
+
+        request_queue.push_back(queued_request{data});
+        print("Success.");
     }
 
-    void register_relayer(account_name sender) {
+    void relayjoin(account_name sender) {
         relayers[sender] = relayer{};
     }
 
-private:
-    struct queued_request {
-        string data;
-    };
+    void relayleave(account_name sender) {
+        relayers.erase(sender);
+    }
 
+    // Called by a relayer. Delegate a random available queued request to him.
+    void relayassign(account_name sender) {
+        auto user = relayers.find(sender);
+        eosio_assert(user == relayers.end(), "Relayer is not registered in the system.");
+
+        for (int i = 0; i < request_queue.size(); i++) {
+            // Maximum of 3 relayers.
+            if (request_queue[i].assignees.size() < 3) {
+                request_queue[i].assignees.push_back(user->second);
+                print("Assigned to request ", i);
+                return;
+            }
+        }
+    }
+
+private:
     struct relayer {
         uint64_t balance = 0;
     };
 
+    struct queued_request {
+        // JSON request.
+        string req;
+
+        // JSON response.
+        string res;
+
+        // Relayers working on the task.
+        vector<relayer> assignees;
+    };
+
     vector<queued_request> request_queue;
     map<account_name, relayer> relayers;
-    int difficulty = 1;
+    int difficulty = 3;
 
     string difficulty_prefix() {
         string prefix;
@@ -77,4 +104,4 @@ private:
     }
 };
 
-EOSIO_ABI(blockflare, (request))
+EOSIO_ABI(blockflare, (request)(relayjoin)(relayleave)(relayassign))
