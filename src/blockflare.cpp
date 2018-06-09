@@ -8,18 +8,19 @@
 using namespace eosio;
 using namespace std;
 
-//@abi table accountss i64
+//@abi table ledger i64
 struct Account {
     account_name owner;
     uint64_t balance = 0;
 
     int64_t relaying = -1;
+    string relayAddress;
 
     uint64_t primary_key() const {
         return owner;
     }
 
-    EOSLIB_SERIALIZE(Account, (owner)(balance)(relaying))
+    EOSLIB_SERIALIZE(Account, (owner)(balance)(relaying)(relayAddress))
 };
 
 //@abi table endpoints i64
@@ -115,11 +116,11 @@ public:
     }
 
     //@abi action
-    void assign(account_name relayer) {
+    void assign(account_name relayer, string relayAddress) {
         create_account(relayer);
 
         auto account = accounts.get(relayer, "Cannot create account for some odd reason.");
-        eosio_assert(account.relaying == -1, "You're already relaying for another request.");
+        eosio_assert(account.relaying == -1 && account.relayAddress.empty(), "You're already relaying for another request.");
 
         for (const Request &req : requests) {
             // Get all requests with less than 3 relayers, and an empty response.
@@ -129,6 +130,7 @@ public:
                 });
                 accounts.modify(accounts.get(relayer, "Stranger."), _self, [&](Account &account) {
                     account.relaying = req.id;
+                    account.relayAddress = relayAddress;
                 });
                 break;
             }
@@ -138,7 +140,7 @@ public:
     //@abi action
     void respond(account_name relayer, string response) {
         auto account = accounts.get(relayer, "Account does not exist.");
-        eosio_assert(account.relaying != -1, "You are not relaying.");
+        eosio_assert(account.relaying != -1 && !account.relayAddress.empty(), "You are not relaying.");
         auto request = requests.get(account.relaying, "Unable to find request to respond to.");
 
         requests.modify(requests.get(request.id, "Strange."), _self, [&](Request &req) {
@@ -147,6 +149,7 @@ public:
 
         accounts.modify(accounts.get(relayer, "Stranger."), _self, [&](Account &account) {
             account.relaying = -1;
+            account.relayAddress = "";
         });
     }
 
@@ -154,7 +157,7 @@ public:
 private:
     int difficulty = 4;
 
-    typedef multi_index<N(accountss), Account> accounts_index;
+    typedef multi_index<N(ledger), Account> accounts_index;
     typedef multi_index<N(endpoints), Endpoint> endpoints_index;
     typedef multi_index<N(reque), Request,
             indexed_by<N(byurl), const_mem_fun<Request, uint64_t, &Request::by_url>>
