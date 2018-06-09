@@ -34,7 +34,7 @@ struct Endpoint {
     EOSLIB_SERIALIZE(Endpoint, (url))
 };
 
-//@abi table reque i64
+//@abi table reqias i64
 struct Request {
     uint64_t id;
     string url;
@@ -155,11 +155,11 @@ public:
 
 
 private:
-    int difficulty = 4;
+    int difficulty = 1;
 
     typedef multi_index<N(ledger), Account> accounts_index;
     typedef multi_index<N(endpoints), Endpoint> endpoints_index;
-    typedef multi_index<N(reque), Request,
+    typedef multi_index<N(reqias), Request,
             indexed_by<N(byurl), const_mem_fun<Request, uint64_t, &Request::by_url>>
     > requests_index;
 
